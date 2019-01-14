@@ -1,183 +1,147 @@
-#ifndef MSNGR_HPP
-#define MSNGR_HPP
+/*
+    msngr.cpp
 
-#pragma once
-#if __has_include(<optional>)
-#   include <optional>
-    using std::optional;
-    using std::nullopt;
-#elif __has_include(<experimental/optional>)
-#   include <experimental/optional>
-    using std::experimental::optional;
-    using std::experimental::nullopt;
-#else
-#   error Please use a newer compiler; msngr requires C++14 with experimental features or higher.
-#endif
+    A pubsub, in-process message bus to allow decoupling of concerns within a single application
+    and its utilized libraries.
+*/
+#ifndef MSG_MSNGR_HPP
+#define MSG_MSNGR_HPP
 
 #include <iostream>
 #include <string>
 #include <functional>
 #include <vector>
-#include <unordered_map>
 #include <algorithm>
+#include <locale>
+#include <unordered_map>
 
 using std::string;
 using std::function;
 using std::vector;
-using std::unordered_map;
 using std::transform;
+using std::find_if;
+using std::isspace;
+using std::unordered_map;
 
-/*
-    Msngr
+// The msg namespace contains all used, public classes and structs within msngr.cpp
+namespace msg {
 
-*/
-class Msngr {
-    public:
-        struct Message;
+    // Message is mostly a simple data structure with a topic, category and subcategory. It handles basic getter and setter local as well
+    // as providing a normalized copied of what the developer created (this is for better indexing without losing fidelity).
+    struct Message {
+        public:
+            Message() {};
+            Message(string topic) : mTopic(topic) {};
+            Message(string topic, string category) : mTopic(topic), mCategory(category) {};
+            Message(string topic, string category, string subcategory) : mTopic(topic), mCategory(category), mSubcategory(subcategory) {};
+            
+            ~Message() {};
 
-        Msngr() {};
-        ~Msngr() {};
+            string Topic() { return mTopic; };
+            void Topic(string topic) { mTopic = topic; };
 
-        void emit(string topic);
-        void emit(string topic, string category);
-        void emit(string topic, string category, string subcategory);
+            string Category() { return mCategory; }
+            void Category(string category) { mCategory = category; };
 
-        void on(string topic, const function<void()> &fn);
-        void on(string topic, string category, const function<void()> &fn);
-        void on(string topic, string category, string subcategory, const function<void()> &fn);
+            string Subcategory() { return mSubcategory; }
+            void Subcategory(string subcategory) { mSubcategory = subcategory; };
 
-        void drop(string topic);
-        void drop(string topic, string category);
-        void drop(string topic, string category, string subcategory);
+            Message NormalizedCopy();
 
-    private:
-        class Subscription;
-        unsigned int _index = 0;
-        vector<Subscription> _subscriptions_index;
-        unordered_map<string, vector<unsigned>> _subscriptions_topic;
-        unordered_map<string, vector<unsigned int>> _subscriptions_topic_subcategory;
-        unordered_map<string, vector<unsigned int>> _subscriptions_topic_category_subcategory;
+        private:
+            string mTopic;
+            string mCategory;
+            string mSubcategory;
 
-        // Internal Utilities
-        Message internal_normalize(Message message);
+            static void tolowercase(string& str);
+            static void trim(string& str);
+    };
 
-        // Internal APIs
-        void internal_emit(Message message);
-        bool internal_on(Message message, const function<void()> &fn);
-        bool internal_drop(Message message);
+    void Message::tolowercase(string &str) {
+        transform(str.begin(), str.end(), str.begin(), ::tolower);
+    };
 
-        void internal_subscribe(Message message);
-        void internal_unsubscribe(Message message);
-};
+    void Message::trim(string& str) {
+        // left trim
+        str.erase(str.begin(), find_if(str.begin(), str.end(), [](int ch) {
+            return !isspace(ch);
+        }));
 
-// Nested class definitions
-// Public
-struct Msngr::Message {
-    public:
-        Message() {};
-        Message(optional<string> topic, optional<string> category, optional<string> subcategory) : topicOpt(topic), categoryOpt(category), subcategoryOpt(subcategory) {};
+        // right trim
+        str.erase(find_if(str.rbegin(), str.rend(), [](int ch) {
+            return !isspace(ch);
+        }).base(), str.end());
+    };
 
-        optional<string> topicOpt = nullopt;
-        optional<string> categoryOpt = nullopt;
-        optional<string> subcategoryOpt = nullopt;
-};
+    Message Message::NormalizedCopy() {
+        string t = mTopic;
+        trim(t);
+        tolowercase(t);
 
-// Private
-class Msngr::Subscription {
-    public:
-        Message message;
-        const function<void()> &func;
+        string c = mCategory;
+        trim(c);
+        tolowercase(c);
 
-        Subscription(Message msg, const function<void()> &fn) : message(msg), func(fn) {};
-};
+        string s = mSubcategory;
+        trim(s);
+        tolowercase(s);
 
-// Msngr::* definitions
-// Public
-void Msngr::emit(string topic) {
-    Message msg(topic, nullopt, nullopt);
-    internal_emit(msg);
-};
+        Message result;
+        result.Topic(t);
+        result.Category(c);
+        result.Subcategory(s);
 
-void Msngr::emit(string topic, string category) {
-    Message msg(topic, category, nullopt);
-    internal_emit(msg);
-};
+        return result;
+    };
 
-void Msngr::emit(string topic, string category, string subcategory) {
-    Message msg(topic, category, subcategory);
-    internal_emit(msg);
-};
+    struct Subscription {
+        public:
+            Subscription(Message message, const function<void()> &fn) : mMessage(message.NormalizedCopy()), mFunc(fn) {};
 
-void Msngr::on(string topic, const function<void()> &fn) {
-    Message msg(topic, nullopt, nullopt);
-    internal_on(msg, fn);
-};
+        private:
+            const Message mMessage;
+            const function<void()> &mFunc;
+    };
 
-void Msngr::on(string topic, string category, const function<void()> &fn) {
-    Message msg(topic, category, nullopt);
-    internal_on(msg, fn);
-};
+    class Msngr {
+        public:
+            Msngr() {};
+            ~Msngr() {};
 
-void Msngr::on(string topic, string category, string subcategory, const function<void()> &fn) {
-    Message msg(topic, category, subcategory);
-    internal_on(msg, fn);
-};
+            void Emit(Message message) { emit(message); };
+            void Emit(string topic) { emit(Message(topic)); };
+            void Emit(string topic, string category)  { emit(Message(topic, category)); };
+            void Emit(string topic, string category, string subcategory)  { emit(Message(topic, category, subcategory)); };
 
-void Msngr::drop(string topic) {
+            void On(Subscription subscription) { on(subscription); };
+            void On(Message message, const function<void()> &fn) { on(Subscription(message, fn)); };
+            void On(string topic, const function<void()> &fn) { on(Subscription(Message(topic), fn)); };
+            void On(string topic, string category, const function<void()> &fn) { on(Subscription(Message(topic, category), fn)); };
+            void On(string topic, string category, string subcategory, const function<void()> &fn)  { on(Subscription(Message(topic, category, subcategory), fn)); };
 
-};
+            void Drop(string topic) { drop(Message(topic)); };
+            void Drop(string topic, string category)  { drop(Message(topic, category)); };
+            void Drop(string topic, string category, string subcategory)  { drop(Message(topic, category, subcategory)); };
 
-void Msngr::drop(string topic, string category) {
+        private:
 
-};
 
-void Msngr::drop(string topic, string category, string subcategory) {
+            bool emit(Message message);
+            bool on(Subscription subscription);
+            bool drop(Message message);
+    };
 
-};
+    bool Msngr::emit(Message message) {
+        std::cout << "Msngr::emit" << std::endl;
+    };
 
-// Private Utilities
-Msngr::Message Msngr::internal_normalize(Message message) {
-    Message normalized;
-    if (message.topicOpt != nullopt) {
-        string val = message.topicOpt.value();
-        transform(val.begin(), val.end(), val.begin(), ::tolower);
-        normalized.topicOpt = optional<string>(val);
-    }
+    bool Msngr::on(Subscription subscription) {
+        std::cout << "Msngr::on" << std::endl;
+    };
 
-    if (message.categoryOpt != nullopt) {
-        string val = message.categoryOpt.value();
-        transform(val.begin(), val.end(), val.begin(), ::tolower);
-        normalized.categoryOpt = optional<string>(val);
-    }
-
-    if (message.subcategoryOpt != nullopt) {
-        string val = message.subcategoryOpt.value();
-        transform(val.begin(), val.end(), val.begin(), ::tolower);
-        normalized.subcategoryOpt = optional<string>(val);
-    }
-
-    return normalized;
-};
-
-// Private APIs
-void Msngr::internal_emit(Message message) {
-    message = internal_normalize(message);
-    /*for (Subscription sub : subscriptions) {
-        if (message.topicOpt && message.topicOpt.value() == sub.message.topicOpt.value()) {
-            sub.func();
-        }
-    }*/
-};
-
-bool Msngr::internal_on(Message message, const function<void()> &fn) {
-    Subscription sub(message, fn);
-
-    
-    return true;
-};
-
-bool Msngr::internal_drop(Message message) {
-
+    bool Msngr::drop(Message message) {
+        std::cout << "Msngr::drop" << std::endl;
+    };
 };
 
 #endif
