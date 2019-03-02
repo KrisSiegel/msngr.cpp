@@ -22,6 +22,7 @@ using std::transform;
 using std::find_if;
 using std::isspace;
 using std::unordered_map;
+using std::sort;
 
 // The msg namespace contains all used, public classes and structs within msngr.cpp
 namespace msg {
@@ -94,15 +95,6 @@ namespace msg {
         return result;
     };
 
-    struct Subscription {
-        public:
-            Subscription(Message message, const function<void()> &fn) : mMessage(message.NormalizedCopy()), mFunc(fn) {};
-
-        private:
-            const Message mMessage;
-            const function<void()> &mFunc;
-    };
-
     class Msngr {
         public:
             Msngr() {};
@@ -113,18 +105,27 @@ namespace msg {
             void Emit(string topic, string category)  { emit(Message(topic, category)); };
             void Emit(string topic, string category, string subcategory)  { emit(Message(topic, category, subcategory)); };
 
-            void On(Subscription subscription) { on(subscription); };
-            void On(Message message, const function<void()> &fn) { on(Subscription(message, fn)); };
-            void On(string topic, const function<void()> &fn) { on(Subscription(Message(topic), fn)); };
-            void On(string topic, string category, const function<void()> &fn) { on(Subscription(Message(topic, category), fn)); };
-            void On(string topic, string category, string subcategory, const function<void()> &fn)  { on(Subscription(Message(topic, category, subcategory), fn)); };
+            void On(Message message, function<void(Message)> &fn) { on(Subscription(message, fn)); };
+            void On(string topic, function<void(Message)> &fn) { on(Subscription(Message(topic), fn)); };
+            void On(string topic, string category, function<void(Message)> &fn) { on(Subscription(Message(topic, category), fn)); };
+            void On(string topic, string category, string subcategory, function<void(Message)> &fn)  { on(Subscription(Message(topic, category, subcategory), fn)); };
 
             void Drop(string topic) { drop(Message(topic)); };
             void Drop(string topic, string category)  { drop(Message(topic, category)); };
             void Drop(string topic, string category, string subcategory)  { drop(Message(topic, category, subcategory)); };
 
         private:
+            struct Subscription {
+                public:
+                    Subscription(Message message, function<void(Message)> &fn) : mMessage(message.NormalizedCopy()), mFunc(fn) {};
+                    
+                    Message mMessage;
+                    function<void(Message)> &mFunc;
+            };
 
+            int currentPosition = 0;
+            unordered_map<int, Subscription> subscriptions;
+            unordered_map<string, vector<int>> topicSubscriptions;
 
             bool emit(Message message);
             bool on(Subscription subscription);
@@ -132,15 +133,45 @@ namespace msg {
     };
 
     bool Msngr::emit(Message message) {
-        std::cout << "Msngr::emit" << std::endl;
+        Message normalized = message.NormalizedCopy();
+        if (topicSubscriptions.count(normalized.Topic()) > 0) {
+            for (int i : topicSubscriptions[normalized.Topic()]) {
+                subscriptions[i].mFunc(message);
+            }
+        }
+
+        return true;
     };
 
     bool Msngr::on(Subscription subscription) {
-        std::cout << "Msngr::on" << std::endl;
+        // Store the subscription
+        int index = currentPosition;
+        subscriptions[index] = subscription;
+        currentPosition++;
+
+        // Now we index this subscription starting with the Topic
+        Message normalized = subscription.mMessage;
+        if (topicSubscriptions.count(normalized.Topic()) == 0) {
+            topicSubscriptions[normalized.Topic()] = vector<int> { index };
+        } else {
+            topicSubscriptions[normalized.Topic()].push_back(index);
+        }
+
+        return true;
     };
 
     bool Msngr::drop(Message message) {
-        std::cout << "Msngr::drop" << std::endl;
+        Message normalized = message.NormalizedCopy();
+        if (topicSubscriptions.count(normalized.Topic()) > 0) {
+            vector<int> indexes;
+            for (int i : topicSubscriptions[normalized.Topic()]) {
+                indexes.push_back(i);
+            }
+            topicSubscriptions.erase(normalized.Topic());
+
+            subscriptions.erase(indexes.begin(), indexes.end());
+        }
+        return true;
     };
 };
 
